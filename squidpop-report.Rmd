@@ -15,21 +15,23 @@ library(leaflet.esri)
 
 
 ```{r xlsx, include=FALSE}
-xlsx <- "data/Squidpops_example_Tasmania_2017.xlsx"
+xlsx <- "data/Squidpops_example_Tasmania_2017.xlsx" # path to the marinegeo squidpop data entry template
 ```
 
 
 ```{r load, include=FALSE}
-# load each of the sheets from the data entry template
+# load each of the sheets from the data entry template as R dataframes
+
+# pull the information from the metadata sheet into a dataframe 
 metadata <- readxl::read_excel(xlsx, sheet = "Metadata", skip = 3, col_names = c("var", "value")) %>% 
   tidyr::spread(var, value)
-  
+
+# load the data from the Location sheet  
 location <- readxl::read_excel(xlsx, sheet = "Location")
+
+# load the data from the Data sheet
 data <- readxl::read_excel(xlsx, sheet = "Data")
 
-# vocab <- readxl::read_excel(xlsx, sheet = "Vocab")
-# schema <- readxl::read_excel(xlsx, sheet = "Schema")
-  
 ```
 
 
@@ -179,7 +181,7 @@ data_w_coords %>%
 
 
 
-## Percent Eaten by depoloyment group
+## Percent Eaten by Deployment Group
 
 ```{r message=FALSE, warning=FALSE, echo=FALSE}
 # calculate % eaten

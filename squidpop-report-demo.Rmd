@@ -33,26 +33,46 @@ theme_MG <-theme_bw()+
 Data was entered into the MarineGEO squidpop data entry template v0.0.3. Parse the information from the seperate Excel sheets and load the data into R as separate dataframes.
 
 ```{r xlsx}
-xlsx <- "data/Squidpops_example_BocasDelToro_2018.xlsx" # path to the marinegeo squidpop data entry template
+# path to the marinegeo squidpop data entry template
+xlsx <- "data/Squidpops_example_BocasDelToro_2018.xlsx" 
 ```
 
 ```{r load}
 # load each of the sheets from the data entry template as R dataframes
 
 # pull the information from the metadata sheet into a dataframe 
-metadata <- readxl::read_excel(xlsx, sheet = "Metadata", skip = 3, col_names = c("var", "value")) %>% 
+metadata <- readxl::read_excel(xlsx, sheet = "Metadata", skip = 3, 
+                               col_names = c("var", "value")) %>% 
   tidyr::spread(var, value)
+
 
 # load the data from the Location sheet  
 location <- readxl::read_excel(xlsx, sheet = "Location")
 
+
 # load the data from the Data sheet
 data <- readxl::read_excel(xlsx, sheet = "Data")
+```
 
+### Metadata
+
+```{r}
 metadata
+```
+
+### Location
+
+```{r}
 location
+```
+
+### Data
+
+```{r}
 data
 ```
+
+## Data Cleanup
 
 A few columns need to be cleaned up. The read_excel() function did not parse the time fields correctly (ie '1899-12-31 11:40:00') so we will need to fix it. Also, we want to calculate the percent bait lost (the number of bait missing divided by the number of stakes remaining) at each of the time checks. Finally, add the coordinates to the data using a left join.
 
@@ -61,11 +81,11 @@ A few columns need to be cleaned up. The read_excel() function did not parse the
 
 data_w_coords <- data %>% 
   mutate(timeDeployed=format(timeDeployed, format="%H:%M"), 
-         timeCollected=format(timeCollected, format="%H:%M")) %>% # read_excel() doesn't parse time fields properly so let's correct it
-  mutate(stakesRemaining1hr = numberDeployed) %>%  # number of stakes remaining @ 1 hr didn't get recorded 
+         timeCollected=format(timeCollected, format="%H:%M")) %>% # clean up hh:mm fields
+  mutate(stakesRemaining1hr = numberDeployed) %>%  # stakes remaining @ 1 hr didn't get recorded 
   mutate(percentBaitLost1hr=baitMissing1hr/stakesRemaining1hr, 
-         percentBaitLost24hr=baitMissing24hr/stakesRemaining24hr) %>% # calculates the percent of bait lost in each time period
-  dplyr::left_join(location, by=c("location"="location")) # uses a left join to add the location information
+         percentBaitLost24hr=baitMissing24hr/stakesRemaining24hr) %>% # calc the % of bait lost 
+  dplyr::left_join(location, by=c("location"="location")) # left join to add the location info
 
 
 data_w_coords
@@ -93,12 +113,14 @@ data_sf %>%
 ```
 
 
+## Summary Table - Percent consumed by Habitat Type
+
 ```{r long}
 
 # convert the data table into a long format by grouping the percentBaitLost by hour
 data_w_coords_long <- data_w_coords %>% 
   select(location, habitat, percentBaitLost1hr, percentBaitLost24hr) %>% # select the columns of interest
-  gather(percentBaitLost24hr, percentBaitLost1hr, key="time", value="percentLost") %>% # gathe percentBaitLost to a long format
+  gather(percentBaitLost24hr, percentBaitLost1hr, key="time", value="percentLost") %>% # gather percentBaitLost to a long format
   mutate(hours=str_extract(time, "[[:digit:]]+")) %>% # extract the number from the name (percentBaitLost24hr -> 24)
   mutate(hoursLabel = case_when(
     hours==1 ~str_c(hours, "Hour", sep=" "),
@@ -108,7 +130,6 @@ data_w_coords_long <- data_w_coords %>%
 #data_w_coords_long
 ```
 
-## Summary Table - Percent consumed by Habitat Type
 
 ```{r summaryTable}
 # create a summary table of the average percent consumed by habitat type
