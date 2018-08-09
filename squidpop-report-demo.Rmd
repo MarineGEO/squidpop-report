@@ -1,0 +1,169 @@
+---
+title: Squidpops Visualization Demo
+date: '2018-08-09'
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(purrr)
+library(knitr)
+library(sf)
+library(leaflet)
+library(leaflet.esri)
+```
+
+```{r customTheme, include=FALSE}
+theme_MG <-theme_bw()+
+  theme(panel.grid.major = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        panel.grid.minor = element_blank(),
+        legend.position="none", # position of legend or none
+        legend.direction="horizontal", # orientation of legend
+        legend.title= element_blank(), # no title for legend
+        legend.key.size = unit(1.0, "cm"),
+        axis.text.x=element_text(size=10),
+        axis.text.y=element_text(size=10)
+        )
+```
+
+## Load Squidpop Data Entry Template into R
+
+Data was entered into the MarineGEO squidpop data entry template v0.0.3. Parse the information from the seperate Excel sheets and load the data into R as separate dataframes.
+
+```{r xlsx}
+xlsx <- "data/Squidpops_example_BocasDelToro_2018.xlsx" # path to the marinegeo squidpop data entry template
+```
+
+```{r load}
+# load each of the sheets from the data entry template as R dataframes
+
+# pull the information from the metadata sheet into a dataframe 
+metadata <- readxl::read_excel(xlsx, sheet = "Metadata", skip = 3, col_names = c("var", "value")) %>% 
+  tidyr::spread(var, value)
+
+# load the data from the Location sheet  
+location <- readxl::read_excel(xlsx, sheet = "Location")
+
+# load the data from the Data sheet
+data <- readxl::read_excel(xlsx, sheet = "Data")
+
+metadata
+location
+data
+```
+
+A few columns need to be cleaned up. The read_excel() function did not parse the time fields correctly (ie '1899-12-31 11:40:00') so we will need to fix it. Also, we want to calculate the percent bait lost (the number of bait missing divided by the number of stakes remaining) at each of the time checks. Finally, add the coordinates to the data using a left join.
+
+```{r datacleanup}
+# clean up the squidpop dataset by fixing the time format, calculating the percent bait lost, and joining the coordinates from the Location sheet
+
+data_w_coords <- data %>% 
+  mutate(timeDeployed=format(timeDeployed, format="%H:%M"), 
+         timeCollected=format(timeCollected, format="%H:%M")) %>% # read_excel() doesn't parse time fields properly so let's correct it
+  mutate(stakesRemaining1hr = numberDeployed) %>%  # number of stakes remaining @ 1 hr didn't get recorded 
+  mutate(percentBaitLost1hr=baitMissing1hr/stakesRemaining1hr, 
+         percentBaitLost24hr=baitMissing24hr/stakesRemaining24hr) %>% # calculates the percent of bait lost in each time period
+  dplyr::left_join(location, by=c("location"="location")) # uses a left join to add the location information
+
+
+data_w_coords
+```
+
+## Map
+```{r map}
+# color schema for each of the habitat types as a named list
+pal <- c("Reef"="#F8766D","Mangrove"="#B79F00", "Sand"="#619CFF", "Seagrass"="#00BA38", "Other"="black")
+
+# turn the dataframe into a simple features (sf) object
+data_sf <- data_w_coords %>% rowwise() %>% 
+  dplyr::mutate(circle_color = pluck(pal, habitat)) %>% # add the color to the data fame
+  sf::st_as_sf(coords=c("decimalLongitude", "decimalLatitude"), crs="+proj=longlat +datum=WGS84")
+
+# create a leaflet map
+data_sf %>% 
+  leaflet::leaflet() %>% # leaflet map
+  addProviderTiles(providers$Esri.WorldImagery, options = providerTileOptions(opacity = 0.55)) %>% # adds ESRI base imagery
+  addProviderTiles(providers$OpenMapSurfer.Roads, options = providerTileOptions(opacity = 0.35)) %>% # adds base layer from open map surfer
+  addCircleMarkers(fillColor=~circle_color, radius=10, stroke = TRUE, fillOpacity = 1, color="black", weight=.5) %>% # add markers to the map for each deployment locations. Circle colors are symbolized by the habitat type.
+  addLegend(colors=c(pal) , labels=c(names(pal)), opacity=1) # add legend to map using the color schema named list
+
+
+```
+
+
+```{r long}
+
+# convert the data table into a long format by grouping the percentBaitLost by hour
+data_w_coords_long <- data_w_coords %>% 
+  select(location, habitat, percentBaitLost1hr, percentBaitLost24hr) %>% # select the columns of interest
+  gather(percentBaitLost24hr, percentBaitLost1hr, key="time", value="percentLost") %>% # gathe percentBaitLost to a long format
+  mutate(hours=str_extract(time, "[[:digit:]]+")) %>% # extract the number from the name (percentBaitLost24hr -> 24)
+  mutate(hoursLabel = case_when(
+    hours==1 ~str_c(hours, "Hour", sep=" "),
+    hours>1 ~ str_c(hours, "Hours", sep=" "))) %>% # creates a grammerly correct label
+  filter(!is.na(percentLost)) # removes any rows that don't contain data
+
+#data_w_coords_long
+```
+
+## Summary Table - Percent consumed by Habitat Type
+
+```{r summaryTable}
+# create a summary table of the average percent consumed by habitat type
+data_w_coords_long %>% 
+  group_by(habitat, hoursLabel) %>% # group by habitat and the amount of time
+  summarize(average=paste(round(mean(percentLost*100),3), "%", sep="")) %>% # calculate the average per group
+  spread(hoursLabel, average) # spreads to wide format to print to output
+```
+
+## Number of Deployments by Habitat Type
+
+```{r plotNumDeployHabitat}
+data_w_coords %>% 
+  group_by(habitat) %>% # group by the habitats
+  summarize(count=sum(numberDeployed)) %>% # count the total number of squidpops deployed per habitat group
+  ggplot(aes(x=habitat, y=count, fill=habitat))+ # construct the plot using ggplot
+  geom_bar(stat="identity")+ # add bars
+  ylab("Number of Deployments")+ # axis label
+  xlab("Habitat Type")+ # axis label
+  theme_MG # custom theme defined above
+
+```
+
+
+## Box and Whiskers Plot
+
+```{r whiskers, fig.height=6, fig.width=5}
+data_w_coords_long %>% 
+  ggplot(aes(x=habitat, y=percentLost * 100, fill=habitat))+ # graph percent lost by habitat
+  geom_boxplot() + # add box whisker 
+  xlab("") + # axis labels
+  ylab("% bait lost") + # axis labels
+  facet_grid(hoursLabel ~ .) + # facet plot by elapsed time
+  theme_MG + # custom theme defined above
+  theme(strip.background = element_blank(), # removes gray box behind the facet label
+        strip.placement = "outside",
+        panel.spacing = unit(2, "lines"), # controls spacing between facets
+        strip.text.y = element_text(size = 16, angle = 0) # facet label size
+        )
+```
+
+
+## Percent Eaten by Deployment Group
+
+```{r deploymentFacet, message=FALSE, warning=FALSE}
+# calculate % eaten
+data_w_coords_long %>% 
+  ggplot(aes(factor(hours), percentLost*100, group=location, color=habitat))+ # plot number hours by percent lost using the location as the grouping variable
+  geom_point(stat="identity", position = position_dodge(0.2), alpha=0.9, shape=21, size=4, stroke=1.1)+ # add points to plot
+  ylab("% Eaten")+ # axis label
+  xlab("Elapsed time\n(hours)")+ # axis label
+  geom_line(linetype="dashed", alpha=0.25, color="black")+ # add lines that connect the points
+  theme_MG + # custom theme defined above
+  facet_grid(~habitat)+ # facet by habitat group
+  theme(strip.background = element_blank(),
+        strip.text.x = element_text(size = 10))
+
+```
