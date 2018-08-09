@@ -1,0 +1,212 @@
+---
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(purrr)
+library(knitr)
+library(sf)
+library(leaflet)
+library(leaflet.esri)
+```
+
+
+```{r xlsx, include=FALSE}
+xlsx <- "data/Squidpops_example_Tasmania_2017.xlsx"
+```
+
+
+```{r load, include=FALSE}
+# load each of the sheets from the data entry template
+metadata <- readxl::read_excel(xlsx, sheet = "Metadata", skip = 3, col_names = c("var", "value")) %>% 
+  tidyr::spread(var, value)
+  
+location <- readxl::read_excel(xlsx, sheet = "Location")
+data <- readxl::read_excel(xlsx, sheet = "Data")
+
+# vocab <- readxl::read_excel(xlsx, sheet = "Vocab")
+# schema <- readxl::read_excel(xlsx, sheet = "Schema")
+  
+```
+
+
+## `r pluck(metadata, "Title")`
+
+`r pluck(metadata, "Abstract")`
+
+### People
+
+```{r echo=FALSE, results='asis'}
+people <- pluck(metadata, "People") %>% str_split(";") %>% pluck(1) %>% map_chr(str_trim)
+#people
+
+for(p in people){
+  cat('  -', p, '\n')
+}
+```
+
+
+```{r datacleanup, include=FALSE}
+# join the location data with the data using a left join
+data_w_coords <- dplyr::left_join(data, location, by=c("location"="location")) %>% 
+  mutate(timeDeployed=format(timeDeployed, format="%H:%M"), timeCollected=format(timeCollected, format="%H:%M")) %>%
+  mutate(stakesRemaining1hr = numberDeployed) %>%  # number of stakes remaining at 1 hr not recorded
+  mutate(percentBaitLost1hr=baitMissing1hr/stakesRemaining1hr, percentBaitLost24hr=baitMissing24hr/stakesRemaining24hr)
+
+data_w_coords
+```
+
+## Map
+```{r, echo=FALSE}
+
+
+
+getColor <- function(habitat){
+  if(habitat=="Reef"){
+    "#F8766D"
+  } else if (habitat=="Mangrove"){
+    "#B79F00"
+  } else if (habitat=="Sand"){
+    "#619CFF" 
+  } else if (habitat=="Seagrass"){
+    "#00BA38"
+  } else {
+    "black"
+  }
+}
+
+
+
+data_sf <- data_w_coords %>% rowwise() %>% 
+  dplyr::mutate(circle_color = getColor(habitat)) %>% 
+  sf::st_as_sf(coords=c("decimalLongitude", "decimalLatitude"), crs="+proj=longlat +datum=WGS84")
+
+
+data_sf %>% 
+  leaflet::leaflet() %>% 
+  addProviderTiles(providers$Esri.WorldImagery, options = providerTileOptions(opacity = 0.55)) %>% # esri imagery
+  addProviderTiles(providers$OpenMapSurfer.Roads, options = providerTileOptions(opacity = 0.35)) %>% #open map surfer
+  addCircleMarkers(fillColor=~circle_color, radius=10, stroke = TRUE, fillOpacity = 1, color="black", weight=.5) %>% 
+  addLegend(colors=c("#F8766D", "#B79F00", "#619CFF", "#00BA38", "black") , labels=c("Reef", "Mangrove", "Sand", "Seagrass", "Other"), opacity=1)
+
+
+```
+
+
+```{r, echo=FALSE}
+summary <- data_w_coords %>% summarise(sum=sum(numberDeployed), minDate=min(dateDeployed), maxDate=max(dateCollected))
+```
+
+## Summary
+
+There were `r pluck(summary, "sum")` squidpops deployed between `r pluck(summary, "minDate")` and `r pluck(summary, "maxDate")`. 
+
+```{r, echo=FALSE, results='asis'}
+kable(data_w_coords %>% select(location, habitat, percentBaitLost1hr, percentBaitLost24hr) %>% 
+  gather(percentBaitLost24hr, percentBaitLost1hr, key="time", value="percentLost") %>% 
+  mutate(hours=str_extract(time, "[[:digit:]]+")) %>% 
+  mutate(hoursLabel = case_when(
+  hours==1 ~str_c(hours, "Hour", sep=" "),
+  hours>1 ~ str_c(hours, "Hours", sep=" "))) %>% 
+  filter(!is.na(percentLost)) %>% 
+  group_by(habitat, hoursLabel) %>% summarize(average=paste(round(mean(percentLost*100),2), "%", sep="")) %>% 
+  spread(hoursLabel, average), caption="Squidpop consumption percent by habitat type")
+
+```
+
+
+
+## Number of Deployments by Habitat Type
+
+```{r plotNumDeployHabitat, echo=FALSE}
+data_w_coords %>% 
+  group_by(habitat) %>% 
+  summarize(count=sum(numberDeployed)) %>% 
+  ggplot(aes(x=habitat, y=count, fill=habitat))+
+  geom_bar(stat="identity")+
+  ylab("Number of Deployments")+
+  xlab("Habitat Type")+
+  theme_bw()+
+  theme(panel.grid.major = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        panel.grid.minor = element_blank(),
+        legend.position="none", # position of legend or none
+        legend.direction="horizontal", # orientation of legend
+        legend.title= element_blank(), # no title for legend
+        legend.key.size = unit(1.0, "cm"),
+        axis.text.x=element_text(size=10),
+        axis.text.y=element_text(size=10)
+        )
+
+```
+
+
+## Box and Whiskers Plot
+
+```{r whiskers, fig.height=6, fig.width=5, echo=FALSE}
+data_w_coords %>% 
+  select(location, habitat, percentBaitLost1hr, percentBaitLost24hr) %>% 
+  gather(percentBaitLost24hr, percentBaitLost1hr, key="time", value="percentLost") %>% 
+  mutate(hours=str_extract(time, "[[:digit:]]+")) %>% 
+  mutate(hoursLabel = case_when(
+    hours==1 ~str_c(hours, "Hour", sep=" "),
+    hours>1 ~ str_c(hours, "Hours", sep=" "))) %>% 
+  filter(!is.na(percentLost)) %>% 
+  ggplot(aes(x=habitat, y=percentLost * 100, fill=habitat))+geom_boxplot() +
+  xlab("") + 
+  ylab("% bait lost") +
+  facet_grid(hoursLabel ~ ., switch='x') +
+  theme_bw()+
+  theme(panel.grid.major = element_blank(),
+          plot.title = element_text(hjust = 0.5),
+          panel.grid.minor = element_blank(),
+          legend.position="none", # position of legend or none
+          legend.direction="horizontal", # orientation of legend
+          legend.title= element_blank(), # no title for legend
+          legend.key.size = unit(1.0, "cm"),
+          axis.text.x=element_text(size=10),
+          axis.text.y=element_text(size=10)
+          )+
+  theme(strip.background = element_blank(),
+        strip.placement = "outside", 
+        panel.spacing = unit(2, "lines"),
+        strip.text.x = element_text(size = 16), 
+        strip.text.y = element_text(size = 16, angle = 0))
+```
+
+
+
+## Percent Eaten by depoloyment group
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+# calculate % eaten
+data_w_coords %>% 
+  select(location, habitat, percentBaitLost1hr, percentBaitLost24hr) %>% 
+  gather(percentBaitLost24hr, percentBaitLost1hr, key="time", value="percentLost") %>% 
+  mutate(hours=str_extract(time, "[[:digit:]]+")) %>% 
+  ggplot(aes(factor(hours), percentLost*100, group=location, color=habitat))+
+  geom_point(stat="identity", position = position_dodge(0.2), alpha=0.9, shape=21, size=4, stroke=1.1)+
+  ylab("% Eaten")+
+  xlab("Elapsed time\n(hours)")+
+  geom_line(linetype="dashed", alpha=0.25, color="black")+
+  theme_bw()+
+  theme(panel.grid.major = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        panel.grid.minor = element_blank(),
+        legend.position="none", # position of legend or none
+        legend.direction="horizontal", # orientation of legend
+        legend.title= element_blank(), # no title for legend
+        legend.key.size = unit(1.0, "cm"),
+        axis.text.x=element_text(size=10),
+        axis.text.y=element_text(size=10)
+        )+
+  facet_grid(~habitat)+
+  theme(strip.background = element_blank(),
+        strip.placement = "outside", 
+        strip.text.x = element_text(size = 10))
+
+```
+
