@@ -1,7 +1,9 @@
 ---
-title: Squidpops Visualization Demo
+title: "Squidpops Visualization Demo"
+output:
+  html_document:
+    df_print: paged
 date: '2018-08-09'
-output: html_notebook
 ---
 
 ```{r setup, include=FALSE}
